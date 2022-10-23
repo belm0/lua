@@ -1762,7 +1762,7 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
           int nres = ci->nresults;
           L->ci = ci->previous;  /* back to caller */
           if (nres == 0) {
-            if (l_unlikely(ci->callstatus & CIST_CLSRET))
+            if (l_unlikely(ci->callstatus & CIST_CLSRET))  /* force capture of close result? */
               L->lasttbcterminated = ttistrue(s2v(RA(i)));
             L->top = base - 1;  /* asked for no results */
           } else {

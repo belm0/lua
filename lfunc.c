@@ -105,7 +105,8 @@ UpVal *luaF_findupval (lua_State *L, StkId level) {
 ** boolean 'yy' controls whether the call is yieldable.
 ** (This function assumes EXTRA_STACK.)
 ** If called with an error, CIST_CLSRET is set so that the return
-** value will be captured into L->lasttbcterminated.
+** value will be captured into L->lasttbcterminated.  (It's done by 'poscall' /
+** 'OP_RETURN1', despite nResults of the call being set to 0.)
 */
 static void callclosemethod (lua_State *L, TValue *obj, TValue *err, int yy) {
   StkId top = L->top;
@@ -224,7 +225,8 @@ static void poptbclist (lua_State *L) {
 /*
 ** Close all upvalues and to-be-closed variables up to the given stack
 ** level. Return restored 'level'.  'status` may be modified to LUA_OK
-** if all errors were terminated.
+** if all errors were terminated.  (A __close method can terminate an
+** error by returing 'true'.)
 */
 StkId luaF_close (lua_State *L, StkId level, int *status, int yy) {
   ptrdiff_t levelrel = savestack(L, level);
