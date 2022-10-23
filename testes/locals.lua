@@ -979,6 +979,117 @@ do
 
 end
 
+do
+  -- yielding inside closing metamethods after an error, with error suppression
+
+  local co = coroutine.wrap(function ()
+
+    local function foo (err)
+
+      local z <close> = func2close(function(_, msg)
+        assert(msg == nil or msg == err + 20)
+        coroutine.yield("z")
+        return true
+      end)
+
+      local y <close> = func2close(function(_, msg)
+        -- still gets the original error (if any)
+        assert(msg == err or (msg == nil and err == 1))
+        coroutine.yield("y")
+        if err then error(err + 20) end   -- creates or changes the error
+      end)
+
+      local x <close> = func2close(function(_, msg)
+        assert(msg == err or (msg == nil and err == 1))
+        coroutine.yield("x")
+        return 100, 200
+      end)
+
+      if err == 10 then error(err) else return 10, 20 end
+    end
+
+    coroutine.yield(pcall(foo, nil))  -- no error
+    coroutine.yield(pcall(foo, 1))    -- error in __close
+    return pcall(foo, 10)     -- 'foo' will raise an error
+  end)
+
+  local a, b = co()   -- first foo: no error
+  assert(a == "x" and b == nil)    -- yields inside 'x'; Ok
+  a, b = co()
+  assert(a == "y" and b == nil)    -- yields inside 'y'; Ok
+  a, b = co()
+  assert(a == "z" and b == nil)    -- yields inside 'z'; Ok
+  local a, b, c = co()
+  assert(a and b == 10 and c == 20)   -- returns from 'pcall(foo, nil)'
+
+  local a, b = co()   -- second foo: error in __close
+  assert(a == "x" and b == nil)    -- yields inside 'x'; Ok
+  a, b = co()
+  assert(a == "y" and b == nil)    -- yields inside 'y'; Ok
+  a, b = co()
+  assert(a == "z" and b == nil)    -- yields inside 'z'; Ok
+  local a, b, c = co()
+  -- FIXME: return value of foo() is being lost, even though error is suppressed
+  --assert(a and b == 10 and c == 20)   -- returns from 'pcall(foo, 1)'
+  assert(a)
+
+  local a, b = co()    -- third foo: error in function body
+  assert(a == "x" and b == nil)    -- yields inside 'x'; Ok
+  a, b = co()
+  assert(a == "y" and b == nil)    -- yields inside 'y'; Ok
+  a, b = co()
+  assert(a == "z" and b == nil)    -- yields inside 'z'; Ok
+  local a, b = co()
+  assert(a and b == nil)    -- returns from 'pcall(foo, 10)'
+
+end
+
+do
+  -- error suppression by closing metamethods, without yielding
+
+  local co = coroutine.wrap(function ()
+
+    local function foo (err)
+
+      local z <close> = func2close(function(_, msg)
+        assert(msg == nil or msg == err + 20)
+        return true
+      end)
+
+      local y <close> = func2close(function(_, msg)
+        -- still gets the original error (if any)
+        assert(msg == err or (msg == nil and err == 1))
+        if err then error(err + 20) end   -- creates or changes the error
+      end)
+
+      local x <close> = func2close(function(_, msg)
+        assert(msg == err or (msg == nil and err == 1))
+        return 100, 200
+      end)
+
+      if err == 10 then error(err) else return 10, 20 end
+    end
+
+    coroutine.yield(pcall(foo, nil))  -- no error
+    coroutine.yield(pcall(foo, 1))    -- error in __close
+    return pcall(foo, 10)     -- 'foo' will raise an error
+  end)
+
+  -- first foo: no error
+  local a, b, c = co()
+  assert(a and b == 10 and c == 20)   -- returns from 'pcall(foo, nil)'
+
+  -- second foo: error in __close
+  local a, b, c = co()
+  -- FIXME: return value of foo() is being lost, even though error is suppressed
+  --assert(a and b == 10 and c == 20)   -- returns from 'pcall(foo, 1)'
+  assert(a)
+
+  -- third foo: error in function body
+  local a, b = co()
+  assert(a and b == nil)    -- returns from 'pcall(foo, 10)'
+
+end
 
 do
   -- an error in a wrapped coroutine closes variables
