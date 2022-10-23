@@ -112,10 +112,7 @@ static void callclosemethod (lua_State *L, TValue *obj, TValue *err, int yy) {
   setobj2s(L, top + 1, obj);  /* with 'self' as the 1st argument */
   setobj2s(L, top + 2, err);  /* and error msg. as 2nd argument */
   L->top = top + 3;  /* add function and arguments */
-  if (yy)
-    luaD_call(L, top, 0);
-  else
-    luaD_callnoyield(L, top, 0);
+  luaD_rawcall(L, top, 0, yy, !ttisstrictnil(err));
 }
 
 
@@ -231,6 +228,7 @@ StkId luaF_close (lua_State *L, StkId level, int status, int yy) {
   while (L->tbclist >= level) {  /* traverse tbc's down to that level */
     StkId tbc = L->tbclist;  /* get variable index */
     poptbclist(L);  /* remove it from list */
+    L->lasttbcterminated = 0;
     prepcallclosemth(L, tbc, status, yy);  /* close variable */
     level = restorestack(L, levelrel);
   }

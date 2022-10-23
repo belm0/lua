@@ -606,7 +606,7 @@ CallInfo *luaD_precall (lua_State *L, StkId func, int nresults) {
 ** check the stack before doing anything else. 'luaD_precall' already
 ** does that.
 */
-l_sinline void ccall (lua_State *L, StkId func, int nResults, int inc) {
+l_sinline void ccall (lua_State *L, StkId func, int nResults, int inc, int for_close) {
   CallInfo *ci;
   L->nCcalls += inc;
   if (l_unlikely(getCcalls(L) >= LUAI_MAXCCALLS)) {
@@ -615,9 +615,17 @@ l_sinline void ccall (lua_State *L, StkId func, int nResults, int inc) {
   }
   if ((ci = luaD_precall(L, func, nResults)) != NULL) {  /* Lua function? */
     ci->callstatus = CIST_FRESH;  /* mark that it is a "fresh" execute */
+    if (for_close) {
+      ci->callstatus |= CIST_CLSRET;
+    }
     luaV_execute(L, ci);  /* call it */
   }
   L->nCcalls -= inc;
+}
+
+
+void luaD_rawcall (lua_State *L, StkId func, int nResults, int yy, int for_close) {
+  ccall(L, func, nResults, yy ? 1 : nyci, for_close);
 }
 
 
@@ -625,7 +633,7 @@ l_sinline void ccall (lua_State *L, StkId func, int nResults, int inc) {
 ** External interface for 'ccall'
 */
 void luaD_call (lua_State *L, StkId func, int nResults) {
-  ccall(L, func, nResults, 1);
+  ccall(L, func, nResults, 1, 0);
 }
 
 
@@ -633,7 +641,7 @@ void luaD_call (lua_State *L, StkId func, int nResults) {
 ** Similar to 'luaD_call', but does not allow yields during the call.
 */
 void luaD_callnoyield (lua_State *L, StkId func, int nResults) {
-  ccall(L, func, nResults, nyci);
+  ccall(L, func, nResults, nyci, 0);
 }
 
 
@@ -768,7 +776,7 @@ static void resume (lua_State *L, void *ud) {
   StkId firstArg = L->top - n;  /* first argument */
   CallInfo *ci = L->ci;
   if (L->status == LUA_OK)  /* starting a coroutine? */
-    ccall(L, firstArg - 1, LUA_MULTRET, 0);  /* just call its body */
+    ccall(L, firstArg - 1, LUA_MULTRET, 0, 0);  /* just call its body */
   else {  /* resuming from previous yield */
     lua_assert(L->status == LUA_YIELD);
     L->status = LUA_OK;  /* mark that it is running (again) */

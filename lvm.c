@@ -1761,9 +1761,11 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         else {  /* do the 'poscall' here */
           int nres = ci->nresults;
           L->ci = ci->previous;  /* back to caller */
-          if (nres == 0)
+          if (nres == 0) {
+            if (l_unlikely(ci->callstatus & CIST_CLSRET))
+              L->lasttbcterminated = ttistrue(s2v(RA(i)));
             L->top = base - 1;  /* asked for no results */
-          else {
+          } else {
             StkId ra = RA(i);
             setobjs2s(L, base - 1, ra);  /* at least this result */
             L->top = base;
