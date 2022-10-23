@@ -606,7 +606,7 @@ CallInfo *luaD_precall (lua_State *L, StkId func, int nresults) {
 ** check the stack before doing anything else. 'luaD_precall' already
 ** does that.
 */
-l_sinline void ccall (lua_State *L, StkId func, int nResults, int inc, int for_close) {
+l_sinline void ccall (lua_State *L, StkId func, int nResults, int inc, int ci_mask) {
   CallInfo *ci;
   L->nCcalls += inc;
   if (l_unlikely(getCcalls(L) >= LUAI_MAXCCALLS)) {
@@ -614,18 +614,18 @@ l_sinline void ccall (lua_State *L, StkId func, int nResults, int inc, int for_c
     luaE_checkcstack(L);
   }
   if ((ci = luaD_precall(L, func, nResults)) != NULL) {  /* Lua function? */
-    ci->callstatus = CIST_FRESH;  /* mark that it is a "fresh" execute */
-    if (for_close) {
-      ci->callstatus |= CIST_CLSRET;
-    }
+    ci->callstatus = CIST_FRESH | ci_mask;  /* mark that it is a "fresh" execute */
     luaV_execute(L, ci);  /* call it */
   }
   L->nCcalls -= inc;
 }
 
+/*
+** External raw interface for 'ccall'.  'yy' can be 1 to allow yielding.
+*/
 
-void luaD_rawcall (lua_State *L, StkId func, int nResults, int yy, int for_close) {
-  ccall(L, func, nResults, yy ? 1 : nyci, for_close);
+void luaD_rawcall (lua_State *L, StkId func, int nResults, int yy, int ci_mask) {
+  ccall(L, func, nResults, yy ? 1 : nyci, ci_mask);
 }
 
 

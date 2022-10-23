@@ -104,15 +104,18 @@ UpVal *luaF_findupval (lua_State *L, StkId level) {
 ** Call closing method for object 'obj' with error message 'err'. The
 ** boolean 'yy' controls whether the call is yieldable.
 ** (This function assumes EXTRA_STACK.)
+** If called with an error, CIST_CLSRET is set so that the return
+** value will be captured into L->lasttbcterminated.
 */
 static void callclosemethod (lua_State *L, TValue *obj, TValue *err, int yy) {
   StkId top = L->top;
+  int ci_mask = ttisstrictnil(err) ? 0 : CIST_CLSRET;
   const TValue *tm = luaT_gettmbyobj(L, obj, TM_CLOSE);
   setobj2s(L, top, tm);  /* will call metamethod... */
   setobj2s(L, top + 1, obj);  /* with 'self' as the 1st argument */
   setobj2s(L, top + 2, err);  /* and error msg. as 2nd argument */
   L->top = top + 3;  /* add function and arguments */
-  luaD_rawcall(L, top, 0, yy, !ttisstrictnil(err));
+  luaD_rawcall(L, top, 0, yy, ci_mask);
 }
 
 
