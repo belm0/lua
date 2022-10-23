@@ -1585,7 +1585,7 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
       }
       vmcase(OP_CLOSE) {
         StkId ra = RA(i);
-        Protect(luaF_close(L, ra, LUA_OK, 1));
+        Protect(luaF_closewithouterr(L, ra, LUA_OK, 1));
         vmbreak;
       }
       vmcase(OP_TBC) {
@@ -1722,7 +1722,7 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
           ci->u2.nres = n;  /* save number of returns */
           if (L->top < ci->top)
             L->top = ci->top;
-          luaF_close(L, base, CLOSEKTOP, 1);
+          luaF_closewithouterr(L, base, CLOSEKTOP, 1);
           updatetrap(ci);
           updatestack(ci);
         }
@@ -1761,9 +1761,11 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         else {  /* do the 'poscall' here */
           int nres = ci->nresults;
           L->ci = ci->previous;  /* back to caller */
-          if (nres == 0)
+          if (nres == 0) {
+            if (l_unlikely(ci->callstatus & CIST_CLSRET))  /* force capture of close result? */
+              L->lasttbcterminated = ttistrue(s2v(RA(i)));
             L->top = base - 1;  /* asked for no results */
-          else {
+          } else {
             StkId ra = RA(i);
             setobjs2s(L, base - 1, ra);  /* at least this result */
             L->top = base;

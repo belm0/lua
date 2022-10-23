@@ -324,6 +324,7 @@ struct lua_State {
   int basehookcount;
   int hookcount;
   volatile l_signalT hookmask;
+  int lasttbcterminated;  /* 1 if most-recent __close call suppressed err */
 };
 
 

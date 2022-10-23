@@ -104,18 +104,19 @@ UpVal *luaF_findupval (lua_State *L, StkId level) {
 ** Call closing method for object 'obj' with error message 'err'. The
 ** boolean 'yy' controls whether the call is yieldable.
 ** (This function assumes EXTRA_STACK.)
+** If called with an error, CIST_CLSRET is set so that the return
+** value will be captured into L->lasttbcterminated.  (It's done by 'poscall' /
+** 'OP_RETURN1', despite nResults of the call being set to 0.)
 */
 static void callclosemethod (lua_State *L, TValue *obj, TValue *err, int yy) {
   StkId top = L->top;
+  int ci_mask = ttisstrictnil(err) ? 0 : CIST_CLSRET;
   const TValue *tm = luaT_gettmbyobj(L, obj, TM_CLOSE);
   setobj2s(L, top, tm);  /* will call metamethod... */
   setobj2s(L, top + 1, obj);  /* with 'self' as the 1st argument */
   setobj2s(L, top + 2, err);  /* and error msg. as 2nd argument */
   L->top = top + 3;  /* add function and arguments */
-  if (yy)
-    luaD_call(L, top, 0);
-  else
-    luaD_callnoyield(L, top, 0);
+  luaD_rawcall(L, top, 0, yy, ci_mask);
 }
 
 
@@ -223,18 +224,38 @@ static void poptbclist (lua_State *L) {
 
 /*
 ** Close all upvalues and to-be-closed variables up to the given stack
-** level. Return restored 'level'.
+** level. Return restored 'level'.  'status` may be modified to LUA_OK
+** if all errors were terminated.  (A __close method can terminate an
+** error by returing 'true'.)
 */
-StkId luaF_close (lua_State *L, StkId level, int status, int yy) {
+StkId luaF_close (lua_State *L, StkId level, int *status, int yy) {
   ptrdiff_t levelrel = savestack(L, level);
   luaF_closeupval(L, level);  /* first, close the upvalues */
+  if (L->lasttbcterminated) {
+    *status = LUA_OK;
+    L->lasttbcterminated = 0;
+  }
   while (L->tbclist >= level) {  /* traverse tbc's down to that level */
     StkId tbc = L->tbclist;  /* get variable index */
     poptbclist(L);  /* remove it from list */
-    prepcallclosemth(L, tbc, status, yy);  /* close variable */
+    L->lasttbcterminated = 0;
+    prepcallclosemth(L, tbc, *status, yy);  /* close variable */
+    if (L->lasttbcterminated) {
+      *status = LUA_OK;
+      L->lasttbcterminated = 0;
+    }
     level = restorestack(L, levelrel);
   }
   return level;
+}
+
+
+/*
+** Call luaF_close() with given non-error status.
+*/
+StkId luaF_closewithouterr (lua_State *L, StkId level, int status, int yy) {
+  lua_assert(status == LUA_OK || status == CLOSEK_TOP);
+  return luaF_close(L, level, &status, yy);
 }
 
 
