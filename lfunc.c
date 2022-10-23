@@ -220,19 +220,37 @@ static void poptbclist (lua_State *L) {
 
 /*
 ** Close all upvalues and to-be-closed variables up to the given stack
-** level. Return restored 'level'.
+** level. Return restored 'level'.  'status` may be modified to LUA_OK
+** if all errors were terminated.
 */
-StkId luaF_close (lua_State *L, StkId level, int status, int yy) {
+StkId luaF_close (lua_State *L, StkId level, int *status, int yy) {
   ptrdiff_t levelrel = savestack(L, level);
   luaF_closeupval(L, level);  /* first, close the upvalues */
+  if (L->lasttbcterminated) {
+    *status = LUA_OK;
+    L->lasttbcterminated = 0;
+  }
   while (L->tbclist >= level) {  /* traverse tbc's down to that level */
     StkId tbc = L->tbclist;  /* get variable index */
     poptbclist(L);  /* remove it from list */
     L->lasttbcterminated = 0;
-    prepcallclosemth(L, tbc, status, yy);  /* close variable */
+    prepcallclosemth(L, tbc, *status, yy);  /* close variable */
+    if (L->lasttbcterminated) {
+      *status = LUA_OK;
+      L->lasttbcterminated = 0;
+    }
     level = restorestack(L, levelrel);
   }
   return level;
+}
+
+
+/*
+** Call luaF_close() with given non-error status.
+*/
+StkId luaF_closewithouterr (lua_State *L, StkId level, int status, int yy) {
+  lua_assert(status == LUA_OK || status == CLOSEK_TOP);
+  return luaF_close(L, level, &status, yy);
 }
 
 
