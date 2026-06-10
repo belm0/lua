@@ -199,7 +199,7 @@ LUA_API void lua_settop (lua_State *L, int idx) {
   newtop = L->top.p + diff;
   if (diff < 0 && L->tbclist.p >= newtop) {
     lua_assert(hastocloseCfunc(ci->nresults));
-    newtop = luaF_close(L, newtop, CLOSEKTOP, 0);
+    newtop = luaF_close(L, newtop, CLOSEKTOP, 0, NULL);
   }
   L->top.p = newtop;  /* correct top only after closing any upvalue */
   lua_unlock(L);
@@ -212,7 +212,7 @@ LUA_API void lua_closeslot (lua_State *L, int idx) {
   level = index2stack(L, idx);
   api_check(L, hastocloseCfunc(L->ci->nresults) && L->tbclist.p == level,
      "no variable to close at given level");
-  level = luaF_close(L, level, CLOSEKTOP, 0);
+  level = luaF_close(L, level, CLOSEKTOP, 0, NULL);
   setnilvalue(s2v(level));
   lua_unlock(L);
 }

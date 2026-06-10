@@ -808,6 +808,73 @@ do   -- '__close' vs. return hooks in Lua functions
 end
 
 
+do  -- __close returning true suppresses error
+  -- basic suppression: __close returns true, pcall sees no error
+  local closed = false
+  local ok = pcall(function ()
+    local x <close> = func2close(function () closed = true; return true end)
+    error("fail")
+  end)
+  assert(ok and closed)
+
+  -- only exact true suppresses; other truthy values do not
+  for _, v in ipairs({1, "yes", {}, 0}) do
+    local ok, msg = pcall(function ()
+      local x <close> = func2close(function () return v end)
+      error("fail")
+    end)
+    assert(not ok and string.find(msg, "fail"))
+  end
+
+  -- multiple <close> vars: first suppresses, subsequent see nil error
+  local seq = {}
+  local ok = pcall(function ()
+    local a <close> = func2close(function (_, msg)
+      seq[#seq + 1] = msg    -- should be nil (suppressed)
+    end)
+    local b <close> = func2close(function (_, msg)
+      seq[#seq + 1] = msg    -- should be "fail" (original error)
+      return true             -- suppress
+    end)
+    error("fail")
+  end)
+  assert(ok)
+  assert(string.find(seq[1], "fail") and seq[2] == nil)
+
+  -- suppression produces LUA_OK: pcall returns true (no error values)
+  local r1, r2 = pcall(function ()
+    local x <close> = func2close(function () return true end)
+    error("oops")
+  end)
+  assert(r1 == true and r2 == nil)
+
+  -- nested pcall: suppression in inner does not affect outer
+  local inner_ok, outer_ok
+  outer_ok = pcall(function ()
+    local x <close> = func2close(function () end)   -- no suppression
+    inner_ok = pcall(function ()
+      local y <close> = func2close(function () return true end)
+      error("inner")
+    end)
+    assert(inner_ok)
+    error("outer")
+  end)
+  assert(inner_ok and not outer_ok)
+
+  -- __close error during suppressed close: new error takes precedence
+  local ok, msg = pcall(function ()
+    local a <close> = func2close(function ()
+      error("new-error")
+    end)
+    local b <close> = func2close(function ()
+      return true   -- suppress original
+    end)
+    error("original")
+  end)
+  assert(not ok and string.find(msg, "new%-error"))
+end
+
+
 print "to-be-closed variables in coroutines"
 
 do

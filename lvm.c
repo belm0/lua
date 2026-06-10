@@ -1590,7 +1590,7 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
       }
       vmcase(OP_CLOSE) {
         StkId ra = RA(i);
-        Protect(luaF_close(L, ra, LUA_OK, 1));
+        Protect(luaF_close(L, ra, LUA_OK, 1, NULL));
         vmbreak;
       }
       vmcase(OP_TBC) {
@@ -1727,7 +1727,7 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
           ci->u2.nres = n;  /* save number of returns */
           if (L->top.p < ci->top.p)
             L->top.p = ci->top.p;
-          luaF_close(L, base, CLOSEKTOP, 1);
+          luaF_close(L, base, CLOSEKTOP, 1, NULL);
           updatetrap(ci);
           updatestack(ci);
         }

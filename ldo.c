@@ -458,7 +458,7 @@ l_sinline void moveresults (lua_State *L, StkId res, int nres, int wanted) {
       if (hastocloseCfunc(wanted)) {  /* to-be-closed variables? */
         L->ci->callstatus |= CIST_CLSRET;  /* in case of yields */
         L->ci->u2.nres = nres;
-        res = luaF_close(L, res, CLOSEKTOP, 1);
+        res = luaF_close(L, res, CLOSEKTOP, 1, NULL);
         L->ci->callstatus &= ~CIST_CLSRET;
         if (L->hookmask) {  /* if needed, call hook after '__close's */
           ptrdiff_t savedres = savestack(L, res);
@@ -686,10 +686,34 @@ static int finishpcallk (lua_State *L,  CallInfo *ci) {
   else {  /* error */
     StkId func = restorestack(L, ci->u2.funcidx);
     L->allowhook = getoah(ci->callstatus);  /* restore 'allowhook' */
-    func = luaF_close(L, func, status, 1);  /* can yield or raise an error */
+    if (ci->callstatus & CIST_CLSERR) {
+      /* re-entry: a __close yielded (and has now returned or errored) */
+      if (!(ci->callstatus & CIST_CLSSUP)) {
+        /* check the returned value for suppression */
+        if (ttistrue(s2v(L->top.p - 1))) {
+          ci->callstatus |= CIST_CLSSUP;
+          status = CLOSEKTOP;
+          setcistrecst(ci, LUA_OK);
+        }
+      }
+      L->top.p--;  /* remove __close result */
+      func = luaF_close(L, func, (ci->callstatus & CIST_CLSSUP)
+                                    ? CLOSEKTOP : status, 1, NULL);
+    }
+    else {
+      /* first entry: start closing tbc variables */
+      int newstatus;
+      ci->callstatus |= CIST_CLSERR;
+      func = luaF_close(L, func, status, 1, &newstatus);
+      if (newstatus == LUA_OK)
+        ci->callstatus |= CIST_CLSSUP;
+    }
+    if (ci->callstatus & CIST_CLSSUP)
+      status = LUA_OK;
     luaD_seterrorobj(L, status, func);
     luaD_shrinkstack(L);   /* restore stack size in case of overflow */
     setcistrecst(ci, LUA_OK);  /* clear original status */
+    ci->callstatus &= ~(CIST_CLSERR | CIST_CLSSUP);
   }
   ci->callstatus &= ~CIST_YPCALL;
   L->errfunc = ci->u.c.old_errfunc;
@@ -832,6 +856,7 @@ static int precover (lua_State *L, int status) {
   CallInfo *ci;
   while (errorstatus(status) && (ci = findpcall(L)) != NULL) {
     L->ci = ci;  /* go down to recovery functions */
+    ci->callstatus &= ~(CIST_CLSERR | CIST_CLSSUP);  /* error overrides */
     setcistrecst(ci, status);  /* status to finish 'pcall' */
     status = luaD_rawrunprotected(L, unroll, NULL);
   }
@@ -924,7 +949,9 @@ struct CloseP {
 */
 static void closepaux (lua_State *L, void *ud) {
   struct CloseP *pcl = cast(struct CloseP *, ud);
-  luaF_close(L, pcl->level, pcl->status, 0);
+  int newstatus = pcl->status;
+  luaF_close(L, pcl->level, pcl->status, 0, &newstatus);
+  pcl->status = newstatus;
 }
 
 

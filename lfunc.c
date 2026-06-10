@@ -23,6 +23,9 @@
 #include "lstate.h"
 
 
+#define errorstatus(s)	((s) > LUA_YIELD)
+
+
 
 CClosure *luaF_newCclosure (lua_State *L, int nupvals) {
   GCObject *o = luaC_newobj(L, LUA_VCCL, sizeCclosure(nupvals));
@@ -104,17 +107,24 @@ UpVal *luaF_findupval (lua_State *L, StkId level) {
 ** boolean 'yy' controls whether the call is yieldable.
 ** (This function assumes EXTRA_STACK.)
 */
-static void callclosemethod (lua_State *L, TValue *obj, TValue *err, int yy) {
+static int callclosemethod (lua_State *L, TValue *obj, TValue *err, int yy) {
   StkId top = L->top.p;
+  ptrdiff_t toprel = savestack(L, top);
   const TValue *tm = luaT_gettmbyobj(L, obj, TM_CLOSE);
   setobj2s(L, top, tm);  /* will call metamethod... */
   setobj2s(L, top + 1, obj);  /* with 'self' as the 1st argument */
   setobj2s(L, top + 2, err);  /* and error msg. as 2nd argument */
   L->top.p = top + 3;  /* add function and arguments */
   if (yy)
-    luaD_call(L, top, 0);
+    luaD_call(L, top, 1);
   else
-    luaD_callnoyield(L, top, 0);
+    luaD_callnoyield(L, top, 1);
+  top = restorestack(L, toprel);  /* stack may have been reallocated */
+  {
+    int suppressed = ttistrue(s2v(top));
+    L->top.p = top;  /* remove result */
+    return suppressed;
+  }
 }
 
 
@@ -140,7 +150,7 @@ static void checkclosemth (lua_State *L, StkId level) {
 ** the 'level' of the upvalue being closed, as everything after that
 ** won't be used again.
 */
-static void prepcallclosemth (lua_State *L, StkId level, int status, int yy) {
+static int prepcallclosemth (lua_State *L, StkId level, int status, int yy) {
   TValue *uv = s2v(level);  /* value being closed */
   TValue *errobj;
   if (status == CLOSEKTOP)
@@ -149,7 +159,7 @@ static void prepcallclosemth (lua_State *L, StkId level, int status, int yy) {
     errobj = s2v(level + 1);  /* error object goes after 'uv' */
     luaD_seterrorobj(L, status, level + 1);  /* set error object */
   }
-  callclosemethod(L, uv, errobj, yy);
+  return callclosemethod(L, uv, errobj, yy);
 }
 
 
@@ -224,15 +234,22 @@ static void poptbclist (lua_State *L) {
 ** Close all upvalues and to-be-closed variables up to the given stack
 ** level. Return restored 'level'.
 */
-StkId luaF_close (lua_State *L, StkId level, int status, int yy) {
+StkId luaF_close (lua_State *L, StkId level, int status, int yy,
+                  int *pstatus) {
   ptrdiff_t levelrel = savestack(L, level);
+  int suppressed = 0;
   luaF_closeupval(L, level);  /* first, close the upvalues */
   while (L->tbclist.p >= level) {  /* traverse tbc's down to that level */
     StkId tbc = L->tbclist.p;  /* get variable index */
     poptbclist(L);  /* remove it from list */
-    prepcallclosemth(L, tbc, status, yy);  /* close variable */
+    if (prepcallclosemth(L, tbc, status, yy) && errorstatus(status)) {
+      suppressed = 1;
+      status = CLOSEKTOP;  /* subsequent __close calls see nil error */
+    }
     level = restorestack(L, levelrel);
   }
+  if (pstatus != NULL)
+    *pstatus = suppressed ? LUA_OK : status;
   return level;
 }
 
