@@ -1050,6 +1050,70 @@ end
 
 
 do
+  -- yielding __close returns true: suppression across yield
+  local co = coroutine.wrap(function ()
+    return pcall(function ()
+      local x <close> = func2close(function (_, msg)
+        coroutine.yield("x")
+        return true   -- suppress the error
+      end)
+      error(42)
+    end)
+  end)
+
+  local a = co()
+  assert(a == "x")      -- yields from __close
+  local ok, msg = co()  -- resumes; __close returns true → suppressed
+  assert(ok == true and msg == nil)  -- pcall sees no error
+end
+
+
+do
+  -- yielding __close returns non-true: no suppression across yield
+  local co = coroutine.wrap(function ()
+    return pcall(function ()
+      local x <close> = func2close(function (_, msg)
+        coroutine.yield("x")
+        return 1   -- truthy but not true
+      end)
+      error(42)
+    end)
+  end)
+
+  local a = co()
+  assert(a == "x")
+  local ok, msg = co()
+  assert(ok == false and msg == 42)  -- error not suppressed
+end
+
+
+do
+  -- multiple <close> with yield: first suppresses, subsequent see nil
+  local seq = {}
+  local co = coroutine.wrap(function ()
+    return pcall(function ()
+      local a <close> = func2close(function (_, msg)
+        coroutine.yield("a")
+        seq[#seq + 1] = msg   -- should be nil (suppressed)
+      end)
+      local b <close> = func2close(function (_, msg)
+        coroutine.yield("b")
+        seq[#seq + 1] = msg   -- should be 99 (original error)
+        return true            -- suppress
+      end)
+      error(99)
+    end)
+  end)
+
+  assert(co() == "b")     -- b yields first (reverse order)
+  assert(co() == "a")     -- a yields
+  local ok = co()         -- a finishes
+  assert(ok == true)      -- suppressed
+  assert(seq[1] == 99 and seq[2] == nil)
+end
+
+
+do
   -- an error in a wrapped coroutine closes variables
   local x = false
   local y = false
