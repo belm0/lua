@@ -861,6 +861,14 @@ do  -- __close returning true suppresses error
   end)
   assert(inner_ok and not outer_ok)
 
+  -- return values preserved when error-in-close is suppressed
+  local r1, r2, r3 = pcall(function ()
+    local b <close> = func2close(function () return true end)  -- suppress
+    local a <close> = func2close(function () error("fail") end)  -- error
+    return 10, 20
+  end)
+  assert(r1 == true and r2 == 10 and r3 == 20)
+
   -- __close error during suppressed close: new error takes precedence
   local ok, msg = pcall(function ()
     local a <close> = func2close(function ()
@@ -1113,7 +1121,7 @@ do
 end
 
 do
-  -- XXX yielding inside closing metamethods after an error, with error suppression
+  -- yielding inside closing metamethods after an error, with error suppression
 
   local co = coroutine.wrap(function ()
 
@@ -1162,8 +1170,6 @@ do
   a, b = co()
   assert(a == "z" and b == nil)    -- yields inside 'z'; Ok
   local a, b, c = co()
-  -- FIXME: return value of foo() is being lost, even though error is suppressed
-  -- YYY
   assert(a and b == 10 and c == 20)   -- returns from 'pcall(foo, 1)'
 
   local a, b = co()    -- third foo: error in function body
