@@ -331,6 +331,10 @@ struct lua_State {
   int basehookcount;
   int hookcount;
   volatile l_signalT hookmask;
+  TValue *retbuf;  /* saved return values for suppression recovery */
+  ptrdiff_t savedret;  /* stack offset of return values during OP_RETURN close */
+  int nsavedret;  /* count of return values at savedret */
+  int nretbuf;  /* count of values in retbuf */
 };
 
 

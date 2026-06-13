@@ -664,6 +664,41 @@ void luaD_callnoyield (lua_State *L, StkId func, int nResults) {
 
 
 /*
+** Save pending return values to a heap buffer before __close methods
+** overwrite the stack.  Uses 'luaM_realloc_' (which returns NULL on
+** failure instead of throwing) so that OOM during error recovery does
+** not raise a second error; the caller falls back to 'luaD_seterrorobj'.
+*/
+static void saveretvals (lua_State *L) {
+  if (L->savedret != 0 && L->retbuf == NULL) {
+    int nret = L->nsavedret;
+    if (nret > 0) {
+      StkId ra = restorestack(L, L->savedret);
+      TValue *buf = cast(TValue *,
+          luaM_realloc_(L, NULL, 0, nret * sizeof(TValue)));
+      if (buf != NULL) {
+        int i;
+        for (i = 0; i < nret; i++)
+          buf[i] = *s2v(ra + i);
+        L->retbuf = buf;
+        L->nretbuf = nret;
+      }
+    }
+    L->savedret = 0;
+  }
+}
+
+
+static void freeretbuf (lua_State *L) {
+  if (L->retbuf != NULL) {
+    luaM_free_(L, L->retbuf, L->nretbuf * sizeof(TValue));
+    L->retbuf = NULL;
+    L->nretbuf = 0;
+  }
+}
+
+
+/*
 ** Finish the job of 'lua_pcallk' after it was interrupted by an yield.
 ** (The caller, 'finishCcall', does the final call to 'adjustresults'.)
 ** The main job is to complete the 'luaD_pcall' called by 'lua_pcallk'.
@@ -703,14 +738,27 @@ static int finishpcallk (lua_State *L,  CallInfo *ci) {
     else {
       /* first entry: start closing tbc variables */
       int newstatus;
+      saveretvals(L);  /* save return values before close overwrites them */
       ci->callstatus |= CIST_CLSERR;
       func = luaF_close(L, func, status, 1, &newstatus);
       if (newstatus == LUA_OK)
         ci->callstatus |= CIST_CLSSUP;
     }
-    if (ci->callstatus & CIST_CLSSUP)
+    if (ci->callstatus & CIST_CLSSUP && L->retbuf != NULL) {
+      /* suppressed with saved return values: restore them */
+      int i;
+      for (i = 0; i < L->nretbuf; i++)
+        setobj2s(L, func + i, &L->retbuf[i]);
+      L->top.p = func + L->nretbuf;
+      freeretbuf(L);
       status = LUA_OK;
-    luaD_seterrorobj(L, status, func);
+    }
+    else {
+      if (ci->callstatus & CIST_CLSSUP)
+        status = LUA_OK;
+      luaD_seterrorobj(L, status, func);
+      freeretbuf(L);
+    }
     luaD_shrinkstack(L);   /* restore stack size in case of overflow */
     setcistrecst(ci, LUA_OK);  /* clear original status */
     ci->callstatus &= ~(CIST_CLSERR | CIST_CLSSUP);
@@ -741,6 +789,7 @@ static void finishCcall (lua_State *L, CallInfo *ci) {
   if (ci->callstatus & CIST_CLSRET) {  /* was returning? */
     lua_assert(hastocloseCfunc(ci->nresults));
     n = ci->u2.nres;  /* just redo 'luaD_poscall' */
+    L->top.p--;  /* remove __close result left on the stack */
     /* don't need to reset CIST_CLSRET, as it will be set again anyway */
   }
   else {
@@ -987,16 +1036,33 @@ int luaD_pcall (lua_State *L, Pfunc func, void *u,
   CallInfo *old_ci = L->ci;
   lu_byte old_allowhooks = L->allowhook;
   ptrdiff_t old_errfunc = L->errfunc;
+  ptrdiff_t old_savedret = L->savedret;
+  int old_nsavedret = L->nsavedret;
   L->errfunc = ef;
   status = luaD_rawrunprotected(L, func, u);
   if (l_unlikely(status != LUA_OK)) {  /* an error occurred? */
     L->ci = old_ci;
     L->allowhook = old_allowhooks;
+    saveretvals(L);  /* save return values before closeprotected */
     status = luaD_closeprotected(L, old_top, status);
-    luaD_seterrorobj(L, status, restorestack(L, old_top));
+    if (status == LUA_OK && L->retbuf != NULL) {
+      /* error was suppressed and we have saved return values */
+      StkId dest = restorestack(L, old_top);
+      int i;
+      for (i = 0; i < L->nretbuf; i++)
+        setobj2s(L, dest + i, &L->retbuf[i]);
+      L->top.p = dest + L->nretbuf;
+      freeretbuf(L);
+    }
+    else {
+      luaD_seterrorobj(L, status, restorestack(L, old_top));
+      freeretbuf(L);
+    }
     luaD_shrinkstack(L);   /* restore stack size in case of overflow */
   }
   L->errfunc = old_errfunc;
+  L->savedret = old_savedret;
+  L->nsavedret = old_nsavedret;
   return status;
 }
 

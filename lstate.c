@@ -263,6 +263,10 @@ static void preinit_thread (lua_State *L, global_State *g) {
   L->status = LUA_OK;
   L->errfunc = 0;
   L->oldpc = 0;
+  L->retbuf = NULL;
+  L->savedret = 0;
+  L->nsavedret = 0;
+  L->nretbuf = 0;
 }
 
 
@@ -278,6 +282,8 @@ static void close_state (lua_State *L) {
     luaC_freeallobjects(L);  /* collect all objects */
     luai_userstateclose(L);
   }
+  if (L->retbuf != NULL)
+    luaM_freearray(L, L->retbuf, L->nretbuf);
   luaM_freearray(L, G(L)->strt.hash, G(L)->strt.size);
   freestack(L);
   lua_assert(gettotalbytes(g) == sizeof(LG));
@@ -316,6 +322,8 @@ void luaE_freethread (lua_State *L, lua_State *L1) {
   LX *l = fromstate(L1);
   luaF_closeupval(L1, L1->stack.p);  /* close all upvalues */
   lua_assert(L1->openupval == NULL);
+  if (L1->retbuf != NULL)
+    luaM_freearray(L, L1->retbuf, L1->nretbuf);
   luai_userstatefree(L, L1);
   freestack(L1);
   luaM_free(L, l);

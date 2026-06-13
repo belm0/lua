@@ -1727,7 +1727,10 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
           ci->u2.nres = n;  /* save number of returns */
           if (L->top.p < ci->top.p)
             L->top.p = ci->top.p;
+          L->savedret = savestack(L, ra);
+          L->nsavedret = n;
           luaF_close(L, base, CLOSEKTOP, 1, NULL);
+          L->savedret = 0;
           updatetrap(ci);
           updatestack(ci);
         }
