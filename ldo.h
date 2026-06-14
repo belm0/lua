@@ -8,10 +8,57 @@
 #define ldo_h
 
 
+#include <setjmp.h>
+
 #include "llimits.h"
 #include "lobject.h"
 #include "lstate.h"
 #include "lzio.h"
+
+
+/*
+** LUAI_THROW/LUAI_TRY define how Lua does exception handling. By
+** default, Lua handles errors with exceptions when compiling as
+** C++ code, with _longjmp/_setjmp when asked to use them, and with
+** longjmp/setjmp otherwise.
+*/
+#if !defined(LUAI_THROW)				/* { */
+
+#if defined(__cplusplus) && !defined(LUA_USE_LONGJMP)	/* { */
+
+/* C++ exceptions */
+#define LUAI_THROW(L,c)		throw(c)
+#define LUAI_TRY(L,c,a) \
+	try { a } catch(...) { if ((c)->status == 0) (c)->status = -1; }
+#define luai_jmpbuf		int  /* dummy variable */
+
+#elif defined(LUA_USE_POSIX)				/* }{ */
+
+/* in POSIX, try _longjmp/_setjmp (more efficient) */
+#define LUAI_THROW(L,c)		_longjmp((c)->b, 1)
+#define LUAI_TRY(L,c,a)		if (_setjmp((c)->b) == 0) { a }
+#define luai_jmpbuf		jmp_buf
+#define luai_setjmp(buf)	_setjmp(buf)
+
+#else							/* }{ */
+
+/* ISO C handling with long jumps */
+#define LUAI_THROW(L,c)		longjmp((c)->b, 1)
+#define LUAI_TRY(L,c,a)		if (setjmp((c)->b) == 0) { a }
+#define luai_jmpbuf		jmp_buf
+#define luai_setjmp(buf)	setjmp(buf)
+
+#endif							/* } */
+
+#endif							/* } */
+
+
+/* chain list of long jump buffers */
+struct lua_longjmp {
+  struct lua_longjmp *previous;
+  luai_jmpbuf b;
+  volatile int status;  /* error code */
+};
 
 
 /*

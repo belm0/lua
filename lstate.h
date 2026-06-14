@@ -222,6 +222,8 @@ struct CallInfo {
 #if defined(LUA_COMPAT_LT_LE)
 #define CIST_LEQ	(1<<13)  /* using __lt for __le */
 #endif
+#define CIST_CLSERR	(1<<14)  /* error recovery: closing tbc vars (pcall or block) */
+#define CIST_CLSSUP	(1<<15)  /* error recovery: suppressed by __close */
 
 
 /*
@@ -329,6 +331,10 @@ struct lua_State {
   int basehookcount;
   int hookcount;
   volatile l_signalT hookmask;
+  TValue *retbuf;  /* saved return values for suppression recovery */
+  ptrdiff_t savedret;  /* stack offset of return values during OP_RETURN close */
+  int nsavedret;  /* count of return values at savedret */
+  int nretbuf;  /* count of values in retbuf */
 };
 
 

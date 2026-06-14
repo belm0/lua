@@ -10,7 +10,6 @@
 #include "lprefix.h"
 
 
-#include <setjmp.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -43,49 +42,6 @@
 ** Error-recovery functions
 ** =======================================================
 */
-
-/*
-** LUAI_THROW/LUAI_TRY define how Lua does exception handling. By
-** default, Lua handles errors with exceptions when compiling as
-** C++ code, with _longjmp/_setjmp when asked to use them, and with
-** longjmp/setjmp otherwise.
-*/
-#if !defined(LUAI_THROW)				/* { */
-
-#if defined(__cplusplus) && !defined(LUA_USE_LONGJMP)	/* { */
-
-/* C++ exceptions */
-#define LUAI_THROW(L,c)		throw(c)
-#define LUAI_TRY(L,c,a) \
-	try { a } catch(...) { if ((c)->status == 0) (c)->status = -1; }
-#define luai_jmpbuf		int  /* dummy variable */
-
-#elif defined(LUA_USE_POSIX)				/* }{ */
-
-/* in POSIX, try _longjmp/_setjmp (more efficient) */
-#define LUAI_THROW(L,c)		_longjmp((c)->b, 1)
-#define LUAI_TRY(L,c,a)		if (_setjmp((c)->b) == 0) { a }
-#define luai_jmpbuf		jmp_buf
-
-#else							/* }{ */
-
-/* ISO C handling with long jumps */
-#define LUAI_THROW(L,c)		longjmp((c)->b, 1)
-#define LUAI_TRY(L,c,a)		if (setjmp((c)->b) == 0) { a }
-#define luai_jmpbuf		jmp_buf
-
-#endif							/* } */
-
-#endif							/* } */
-
-
-
-/* chain list of long jump buffers */
-struct lua_longjmp {
-  struct lua_longjmp *previous;
-  luai_jmpbuf b;
-  volatile int status;  /* error code */
-};
 
 
 void luaD_seterrorobj (lua_State *L, int errcode, StkId oldtop) {
@@ -458,7 +414,7 @@ l_sinline void moveresults (lua_State *L, StkId res, int nres, int wanted) {
       if (hastocloseCfunc(wanted)) {  /* to-be-closed variables? */
         L->ci->callstatus |= CIST_CLSRET;  /* in case of yields */
         L->ci->u2.nres = nres;
-        res = luaF_close(L, res, CLOSEKTOP, 1);
+        res = luaF_closewithouterr(L, res, CLOSEKTOP, 1);
         L->ci->callstatus &= ~CIST_CLSRET;
         if (L->hookmask) {  /* if needed, call hook after '__close's */
           ptrdiff_t savedres = savestack(L, res);
@@ -664,6 +620,41 @@ void luaD_callnoyield (lua_State *L, StkId func, int nResults) {
 
 
 /*
+** Save pending return values to a heap buffer before __close methods
+** overwrite the stack.  Uses 'luaM_realloc_' (which returns NULL on
+** failure instead of throwing) so that OOM during error recovery does
+** not raise a second error; the caller falls back to 'luaD_seterrorobj'.
+*/
+static void saveretvals (lua_State *L) {
+  if (L->savedret != 0 && L->retbuf == NULL) {
+    int nret = L->nsavedret;
+    if (nret > 0) {
+      StkId ra = restorestack(L, L->savedret);
+      TValue *buf = cast(TValue *,
+          luaM_realloc_(L, NULL, 0, nret * sizeof(TValue)));
+      if (buf != NULL) {
+        int i;
+        for (i = 0; i < nret; i++)
+          buf[i] = *s2v(ra + i);
+        L->retbuf = buf;
+        L->nretbuf = nret;
+      }
+    }
+    L->savedret = 0;
+  }
+}
+
+
+static void freeretbuf (lua_State *L) {
+  if (L->retbuf != NULL) {
+    luaM_free_(L, L->retbuf, L->nretbuf * sizeof(TValue));
+    L->retbuf = NULL;
+    L->nretbuf = 0;
+  }
+}
+
+
+/*
 ** Finish the job of 'lua_pcallk' after it was interrupted by an yield.
 ** (The caller, 'finishCcall', does the final call to 'adjustresults'.)
 ** The main job is to complete the 'luaD_pcall' called by 'lua_pcallk'.
@@ -686,10 +677,51 @@ static int finishpcallk (lua_State *L,  CallInfo *ci) {
   else {  /* error */
     StkId func = restorestack(L, ci->u2.funcidx);
     L->allowhook = getoah(ci->callstatus);  /* restore 'allowhook' */
-    func = luaF_close(L, func, status, 1);  /* can yield or raise an error */
-    luaD_seterrorobj(L, status, func);
+    if (ci->callstatus & CIST_CLSERR) {
+      /* re-entry: a __close yielded (and has now returned or errored) */
+      if (!(ci->callstatus & CIST_CLSSUP)) {
+        /* check the returned value for suppression */
+        if (ttistrue(s2v(L->top.p - 1))) {
+          ci->callstatus |= CIST_CLSSUP;
+          status = CLOSEKTOP;
+          setcistrecst(ci, LUA_OK);
+        }
+      }
+      L->top.p--;  /* remove __close result */
+      {
+        int closestatus = (ci->callstatus & CIST_CLSSUP)
+                            ? CLOSEKTOP : status;
+        func = luaF_close(L, func, &closestatus, 1);
+        if (closestatus == LUA_OK)
+          ci->callstatus |= CIST_CLSSUP;
+      }
+    }
+    else {
+      /* first entry: start closing tbc variables */
+      saveretvals(L);  /* save return values before close overwrites them */
+      ci->callstatus |= CIST_CLSERR;
+      func = luaF_close(L, func, &status, 1);
+      if (status == LUA_OK)
+        ci->callstatus |= CIST_CLSSUP;
+    }
+    if (ci->callstatus & CIST_CLSSUP && L->retbuf != NULL) {
+      /* suppressed with saved return values: restore them */
+      int i;
+      for (i = 0; i < L->nretbuf; i++)
+        setobj2s(L, func + i, &L->retbuf[i]);
+      L->top.p = func + L->nretbuf;
+      freeretbuf(L);
+      status = LUA_OK;
+    }
+    else {
+      if (ci->callstatus & CIST_CLSSUP)
+        status = LUA_OK;
+      luaD_seterrorobj(L, status, func);
+      freeretbuf(L);
+    }
     luaD_shrinkstack(L);   /* restore stack size in case of overflow */
     setcistrecst(ci, LUA_OK);  /* clear original status */
+    ci->callstatus &= ~(CIST_CLSERR | CIST_CLSSUP);
   }
   ci->callstatus &= ~CIST_YPCALL;
   L->errfunc = ci->u.c.old_errfunc;
@@ -717,6 +749,7 @@ static void finishCcall (lua_State *L, CallInfo *ci) {
   if (ci->callstatus & CIST_CLSRET) {  /* was returning? */
     lua_assert(hastocloseCfunc(ci->nresults));
     n = ci->u2.nres;  /* just redo 'luaD_poscall' */
+    L->top.p--;  /* remove __close result left on the stack */
     /* don't need to reset CIST_CLSRET, as it will be set again anyway */
   }
   else {
@@ -832,6 +865,7 @@ static int precover (lua_State *L, int status) {
   CallInfo *ci;
   while (errorstatus(status) && (ci = findpcall(L)) != NULL) {
     L->ci = ci;  /* go down to recovery functions */
+    ci->callstatus &= ~(CIST_CLSERR | CIST_CLSSUP);  /* error overrides */
     setcistrecst(ci, status);  /* status to finish 'pcall' */
     status = luaD_rawrunprotected(L, unroll, NULL);
   }
@@ -924,7 +958,7 @@ struct CloseP {
 */
 static void closepaux (lua_State *L, void *ud) {
   struct CloseP *pcl = cast(struct CloseP *, ud);
-  luaF_close(L, pcl->level, pcl->status, 0);
+  luaF_close(L, pcl->level, &pcl->status, 0);
 }
 
 
@@ -960,16 +994,33 @@ int luaD_pcall (lua_State *L, Pfunc func, void *u,
   CallInfo *old_ci = L->ci;
   lu_byte old_allowhooks = L->allowhook;
   ptrdiff_t old_errfunc = L->errfunc;
+  ptrdiff_t old_savedret = L->savedret;
+  int old_nsavedret = L->nsavedret;
   L->errfunc = ef;
   status = luaD_rawrunprotected(L, func, u);
   if (l_unlikely(status != LUA_OK)) {  /* an error occurred? */
     L->ci = old_ci;
     L->allowhook = old_allowhooks;
+    saveretvals(L);  /* save return values before closeprotected */
     status = luaD_closeprotected(L, old_top, status);
-    luaD_seterrorobj(L, status, restorestack(L, old_top));
+    if (status == LUA_OK && L->retbuf != NULL) {
+      /* error was suppressed and we have saved return values */
+      StkId dest = restorestack(L, old_top);
+      int i;
+      for (i = 0; i < L->nretbuf; i++)
+        setobj2s(L, dest + i, &L->retbuf[i]);
+      L->top.p = dest + L->nretbuf;
+      freeretbuf(L);
+    }
+    else {
+      luaD_seterrorobj(L, status, restorestack(L, old_top));
+      freeretbuf(L);
+    }
     luaD_shrinkstack(L);   /* restore stack size in case of overflow */
   }
   L->errfunc = old_errfunc;
+  L->savedret = old_savedret;
+  L->nsavedret = old_nsavedret;
   return status;
 }
 

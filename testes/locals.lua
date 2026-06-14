@@ -808,6 +808,119 @@ do   -- '__close' vs. return hooks in Lua functions
 end
 
 
+do  -- __close returning true suppresses error
+  -- basic suppression: pcall returns only true (no error values)
+  local r1, r2 = pcall(function ()
+    local x <close> = func2close(function () return true end)
+    error("fail")
+  end)
+  assert(r1 == true and r2 == nil)
+
+  -- only exact true suppresses; other truthy values do not
+  for _, v in ipairs({1, "yes", {}, 0}) do
+    local ok, msg = pcall(function ()
+      local x <close> = func2close(function () return v end)
+      error("fail")
+    end)
+    assert(not ok and string.find(msg, "fail"))
+  end
+
+  -- multiple <close> vars: first suppresses, subsequent see nil error
+  local seq = {}
+  local ok = pcall(function ()
+    local a <close> = func2close(function (_, msg)
+      seq[#seq + 1] = msg    -- should be nil (suppressed)
+    end)
+    local b <close> = func2close(function (_, msg)
+      seq[#seq + 1] = msg    -- should be "fail" (original error)
+      return true             -- suppress
+    end)
+    error("fail")
+  end)
+  assert(ok)
+  assert(string.find(seq[1], "fail") and seq[2] == nil)
+
+  -- nested pcall: suppression in inner does not affect outer
+  local inner_ok, outer_ok
+  outer_ok = pcall(function ()
+    local x <close> = func2close(function () end)   -- no suppression
+    inner_ok = pcall(function ()
+      local y <close> = func2close(function () return true end)
+      error("inner")
+    end)
+    assert(inner_ok)
+    error("outer")
+  end)
+  assert(inner_ok and not outer_ok)
+
+  -- return values preserved when error-in-close is suppressed
+  local r1, r2, r3 = pcall(function ()
+    local b <close> = func2close(function () return true end)  -- suppress
+    local a <close> = func2close(function () error("fail") end)  -- error
+    return 10, 20
+  end)
+  assert(r1 == true and r2 == 10 and r3 == 20)
+
+  -- __close error during suppressed close: new error takes precedence
+  local ok, msg = pcall(function ()
+    local a <close> = func2close(function ()
+      error("new-error")
+    end)
+    local b <close> = func2close(function ()
+      return true   -- suppress original
+    end)
+    error("original")
+  end)
+  assert(not ok and string.find(msg, "new%-error"))
+end
+
+
+do  -- block-level error suppression (no pcall)
+  -- basic: error in block, __close suppresses, execution continues
+  local reached = false
+  do
+    local x <close> = func2close(function () return true end)
+    error("oops")
+  end
+  reached = true
+  assert(reached)
+
+  -- nested blocks: inner doesn't suppress, outer does
+  reached = false
+  do
+    local x <close> = func2close(function () return true end)
+    do
+      local y <close> = func2close(function () end)
+      error("nested")
+    end
+  end
+  reached = true
+  assert(reached)
+
+  -- pcall inside tbc block works normally
+  do
+    local x <close> = func2close(function () return true end)
+    local ok, msg = pcall(function () error("pcall-err") end)
+    assert(not ok and string.find(msg, "pcall%-err"))
+    error("block-err")
+  end
+
+  -- yielding __close with block-level suppression in coroutine
+  local co = coroutine.wrap(function ()
+    do
+      local x <close> = func2close(function ()
+        coroutine.yield("closing")
+        return true
+      end)
+      error("coro-err")
+    end
+    return "after-block"
+  end)
+  assert(co() == "closing")
+  assert(co() == "after-block")
+end
+
+
 print "to-be-closed variables in coroutines"
 
 do
@@ -978,6 +1091,70 @@ do
   assert(a == "z" and b == nil)    -- yields inside 'z'; Ok
   local st, msg = co()    -- gets final error
   assert(not st and msg == 10 + 20)
+
+end
+
+
+do
+  -- yielding inside closing metamethods after an error, with error suppression
+
+  local co = coroutine.wrap(function ()
+
+    local function foo (err)
+
+      local z <close> = func2close(function(_, msg)
+        assert(msg == nil or msg == err + 20)
+        coroutine.yield("z")
+        return true
+      end)
+
+      local y <close> = func2close(function(_, msg)
+        -- still gets the original error (if any)
+        assert(msg == err or (msg == nil and err == 1))
+        coroutine.yield("y")
+        if err then error(err + 20) end   -- creates or changes the error
+      end)
+
+      local x <close> = func2close(function(_, msg)
+        assert(msg == err or (msg == nil and err == 1))
+        coroutine.yield("x")
+        return 100, 200
+      end)
+
+      if err == 10 then error(err) else return 10, 20 end
+    end
+
+    coroutine.yield(pcall(foo, nil))  -- no error
+    coroutine.yield(pcall(foo, 1))    -- error in __close
+    return pcall(foo, 10)     -- 'foo' will raise an error
+  end)
+
+  local a, b = co()   -- first foo: no error
+  assert(a == "x" and b == nil)    -- yields inside 'x'; Ok
+  a, b = co()
+  assert(a == "y" and b == nil)    -- yields inside 'y'; Ok
+  a, b = co()
+  assert(a == "z" and b == nil)    -- yields inside 'z'; Ok
+  local a, b, c = co()
+  assert(a and b == 10 and c == 20)   -- returns from 'pcall(foo, nil)'
+
+  local a, b = co()   -- second foo: error in __close
+  assert(a == "x" and b == nil)    -- yields inside 'x'; Ok
+  a, b = co()
+  assert(a == "y" and b == nil)    -- yields inside 'y'; Ok
+  a, b = co()
+  assert(a == "z" and b == nil)    -- yields inside 'z'; Ok
+  local a, b, c = co()
+  assert(a and b == 10 and c == 20)   -- returns from 'pcall(foo, 1)'
+
+  local a, b = co()    -- third foo: error in function body
+  assert(a == "x" and b == nil)    -- yields inside 'x'; Ok
+  a, b = co()
+  assert(a == "y" and b == nil)    -- yields inside 'y'; Ok
+  a, b = co()
+  assert(a == "z" and b == nil)    -- yields inside 'z'; Ok
+  local a, b = co()
+  assert(a and b == nil)    -- returns from 'pcall(foo, 10)'
 
 end
 

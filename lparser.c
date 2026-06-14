@@ -762,6 +762,7 @@ static void close_func (LexState *ls) {
   lua_assert(fs->bl == NULL);
   luaK_finish(fs);
   luaM_shrinkvector(L, f->code, f->sizecode, fs->pc, Instruction);
+  luaF_setneedclose(f);
   luaM_shrinkvector(L, f->lineinfo, f->sizelineinfo, fs->pc, ls_byte);
   luaM_shrinkvector(L, f->abslineinfo, f->sizeabslineinfo,
                        fs->nabslineinfo, AbsLineInfo);

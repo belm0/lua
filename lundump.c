@@ -265,6 +265,7 @@ static void loadFunction (LoadState *S, Proto *f, TString *psource) {
   f->is_vararg = loadByte(S);
   f->maxstacksize = loadByte(S);
   loadCode(S, f);
+  luaF_setneedclose(f);
   loadConstants(S, f);
   loadUpvalues(S, f);
   loadProtos(S, f);
