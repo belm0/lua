@@ -20,6 +20,7 @@
 #include "lgc.h"
 #include "lmem.h"
 #include "lobject.h"
+#include "lopcodes.h"
 #include "lstate.h"
 
 
@@ -289,6 +290,19 @@ Proto *luaF_newproto (lua_State *L) {
   f->lastlinedefined = 0;
   f->source = NULL;
   return f;
+}
+
+
+void luaF_setneedclose (Proto *f) {
+  int hastbc = 0, hasclose = 0;
+  int i;
+  for (i = 0; i < f->sizecode; i++) {
+    OpCode op = GET_OPCODE(f->code[i]);
+    if (op == OP_TBC || op == OP_TFORPREP) hastbc = 1;
+    else if (op == OP_CLOSE) hasclose = 1;
+    if (hastbc && hasclose) break;
+  }
+  f->needclose = cast_byte(hastbc && hasclose);
 }
 
 
