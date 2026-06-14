@@ -1590,7 +1590,7 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
       }
       vmcase(OP_CLOSE) {
         StkId ra = RA(i);
-        Protect(luaF_close(L, ra, LUA_OK, 1, NULL));
+        Protect(luaF_closewithouterr(L, ra, LUA_OK, 1));
         vmbreak;
       }
       vmcase(OP_TBC) {
@@ -1729,7 +1729,7 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
             L->top.p = ci->top.p;
           L->savedret = savestack(L, ra);
           L->nsavedret = n;
-          luaF_close(L, base, CLOSEKTOP, 1, NULL);
+          luaF_closewithouterr(L, base, CLOSEKTOP, 1);
           L->savedret = 0;
           updatetrap(ci);
           updatestack(ci);

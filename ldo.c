@@ -458,7 +458,7 @@ l_sinline void moveresults (lua_State *L, StkId res, int nres, int wanted) {
       if (hastocloseCfunc(wanted)) {  /* to-be-closed variables? */
         L->ci->callstatus |= CIST_CLSRET;  /* in case of yields */
         L->ci->u2.nres = nres;
-        res = luaF_close(L, res, CLOSEKTOP, 1, NULL);
+        res = luaF_closewithouterr(L, res, CLOSEKTOP, 1);
         L->ci->callstatus &= ~CIST_CLSRET;
         if (L->hookmask) {  /* if needed, call hook after '__close's */
           ptrdiff_t savedres = savestack(L, res);
@@ -732,16 +732,20 @@ static int finishpcallk (lua_State *L,  CallInfo *ci) {
         }
       }
       L->top.p--;  /* remove __close result */
-      func = luaF_close(L, func, (ci->callstatus & CIST_CLSSUP)
-                                    ? CLOSEKTOP : status, 1, NULL);
+      {
+        int closestatus = (ci->callstatus & CIST_CLSSUP)
+                            ? CLOSEKTOP : status;
+        func = luaF_close(L, func, &closestatus, 1);
+        if (closestatus == LUA_OK)
+          ci->callstatus |= CIST_CLSSUP;
+      }
     }
     else {
       /* first entry: start closing tbc variables */
-      int newstatus;
       saveretvals(L);  /* save return values before close overwrites them */
       ci->callstatus |= CIST_CLSERR;
-      func = luaF_close(L, func, status, 1, &newstatus);
-      if (newstatus == LUA_OK)
+      func = luaF_close(L, func, &status, 1);
+      if (status == LUA_OK)
         ci->callstatus |= CIST_CLSSUP;
     }
     if (ci->callstatus & CIST_CLSSUP && L->retbuf != NULL) {
@@ -998,9 +1002,7 @@ struct CloseP {
 */
 static void closepaux (lua_State *L, void *ud) {
   struct CloseP *pcl = cast(struct CloseP *, ud);
-  int newstatus = pcl->status;
-  luaF_close(L, pcl->level, pcl->status, 0, &newstatus);
-  pcl->status = newstatus;
+  luaF_close(L, pcl->level, &pcl->status, 0);
 }
 
 

@@ -232,25 +232,35 @@ static void poptbclist (lua_State *L) {
 
 /*
 ** Close all upvalues and to-be-closed variables up to the given stack
-** level. Return restored 'level'.
+** level. Return restored 'level'.  '*status' may be changed to LUA_OK
+** if all errors were suppressed by '__close' methods returning true.
 */
-StkId luaF_close (lua_State *L, StkId level, int status, int yy,
-                  int *pstatus) {
+StkId luaF_close (lua_State *L, StkId level, int *status, int yy) {
   ptrdiff_t levelrel = savestack(L, level);
   int suppressed = 0;
   luaF_closeupval(L, level);  /* first, close the upvalues */
   while (L->tbclist.p >= level) {  /* traverse tbc's down to that level */
     StkId tbc = L->tbclist.p;  /* get variable index */
     poptbclist(L);  /* remove it from list */
-    if (prepcallclosemth(L, tbc, status, yy) && errorstatus(status)) {
+    if (prepcallclosemth(L, tbc, *status, yy) && errorstatus(*status)) {
       suppressed = 1;
-      status = CLOSEKTOP;  /* subsequent __close calls see nil error */
+      *status = CLOSEKTOP;  /* subsequent __close calls see nil error */
     }
     level = restorestack(L, levelrel);
   }
-  if (pstatus != NULL)
-    *pstatus = suppressed ? LUA_OK : status;
+  if (suppressed)
+    *status = LUA_OK;
   return level;
+}
+
+
+/*
+** Close upvalues and tbc variables with a non-error status
+** (suppression not applicable).
+*/
+StkId luaF_closewithouterr (lua_State *L, StkId level, int status, int yy) {
+  lua_assert(!errorstatus(status));
+  return luaF_close(L, level, &status, yy);
 }
 
 
