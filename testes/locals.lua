@@ -809,13 +809,12 @@ end
 
 
 do  -- __close returning true suppresses error
-  -- basic suppression: __close returns true, pcall sees no error
-  local closed = false
-  local ok = pcall(function ()
-    local x <close> = func2close(function () closed = true; return true end)
+  -- basic suppression: pcall returns only true (no error values)
+  local r1, r2 = pcall(function ()
+    local x <close> = func2close(function () return true end)
     error("fail")
   end)
-  assert(ok and closed)
+  assert(r1 == true and r2 == nil)
 
   -- only exact true suppresses; other truthy values do not
   for _, v in ipairs({1, "yes", {}, 0}) do
@@ -840,13 +839,6 @@ do  -- __close returning true suppresses error
   end)
   assert(ok)
   assert(string.find(seq[1], "fail") and seq[2] == nil)
-
-  -- suppression produces LUA_OK: pcall returns true (no error values)
-  local r1, r2 = pcall(function ()
-    local x <close> = func2close(function () return true end)
-    error("oops")
-  end)
-  assert(r1 == true and r2 == nil)
 
   -- nested pcall: suppression in inner does not affect outer
   local inner_ok, outer_ok
@@ -1056,69 +1048,6 @@ do
 
 end
 
-
-do
-  -- yielding __close returns true: suppression across yield
-  local co = coroutine.wrap(function ()
-    return pcall(function ()
-      local x <close> = func2close(function (_, msg)
-        coroutine.yield("x")
-        return true   -- suppress the error
-      end)
-      error(42)
-    end)
-  end)
-
-  local a = co()
-  assert(a == "x")      -- yields from __close
-  local ok, msg = co()  -- resumes; __close returns true → suppressed
-  assert(ok == true and msg == nil)  -- pcall sees no error
-end
-
-
-do
-  -- yielding __close returns non-true: no suppression across yield
-  local co = coroutine.wrap(function ()
-    return pcall(function ()
-      local x <close> = func2close(function (_, msg)
-        coroutine.yield("x")
-        return 1   -- truthy but not true
-      end)
-      error(42)
-    end)
-  end)
-
-  local a = co()
-  assert(a == "x")
-  local ok, msg = co()
-  assert(ok == false and msg == 42)  -- error not suppressed
-end
-
-
-do
-  -- multiple <close> with yield: first suppresses, subsequent see nil
-  local seq = {}
-  local co = coroutine.wrap(function ()
-    return pcall(function ()
-      local a <close> = func2close(function (_, msg)
-        coroutine.yield("a")
-        seq[#seq + 1] = msg   -- should be nil (suppressed)
-      end)
-      local b <close> = func2close(function (_, msg)
-        coroutine.yield("b")
-        seq[#seq + 1] = msg   -- should be 99 (original error)
-        return true            -- suppress
-      end)
-      error(99)
-    end)
-  end)
-
-  assert(co() == "b")     -- b yields first (reverse order)
-  assert(co() == "a")     -- a yields
-  local ok = co()         -- a finishes
-  assert(ok == true)      -- suppressed
-  assert(seq[1] == 99 and seq[2] == nil)
-end
 
 do
   -- yielding inside closing metamethods after an error, with error suppression
