@@ -875,6 +875,52 @@ do  -- __close returning true suppresses error
 end
 
 
+do  -- block-level error suppression (no pcall)
+  -- basic: error in block, __close suppresses, execution continues
+  local reached = false
+  do
+    local x <close> = func2close(function () return true end)
+    error("oops")
+  end
+  reached = true
+  assert(reached)
+
+  -- nested blocks: inner doesn't suppress, outer does
+  reached = false
+  do
+    local x <close> = func2close(function () return true end)
+    do
+      local y <close> = func2close(function () end)
+      error("nested")
+    end
+  end
+  reached = true
+  assert(reached)
+
+  -- pcall inside tbc block works normally
+  do
+    local x <close> = func2close(function () return true end)
+    local ok, msg = pcall(function () error("pcall-err") end)
+    assert(not ok and string.find(msg, "pcall%-err"))
+    error("block-err")
+  end
+
+  -- yielding __close with block-level suppression in coroutine
+  local co = coroutine.wrap(function ()
+    do
+      local x <close> = func2close(function ()
+        coroutine.yield("closing")
+        return true
+      end)
+      error("coro-err")
+    end
+    return "after-block"
+  end)
+  assert(co() == "closing")
+  assert(co() == "after-block")
+end
+
+
 print "to-be-closed variables in coroutines"
 
 do

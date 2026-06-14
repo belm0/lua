@@ -222,8 +222,8 @@ struct CallInfo {
 #if defined(LUA_COMPAT_LT_LE)
 #define CIST_LEQ	(1<<13)  /* using __lt for __le */
 #endif
-#define CIST_CLSERR	(1<<14)  /* closing tbc vars for error recovery */
-#define CIST_CLSSUP	(1<<15)  /* error suppressed by __close, still closing */
+#define CIST_CLSERR	(1<<14)  /* error recovery: closing tbc vars (pcall or block) */
+#define CIST_CLSSUP	(1<<15)  /* error recovery: suppressed by __close */
 
 
 /*

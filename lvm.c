@@ -857,6 +857,11 @@ void luaV_finishOp (lua_State *L) {
       break;
     }
     case OP_CLOSE: {  /* yielded closing variables */
+      if (ci->callstatus & CIST_CLSERR) {
+        if (!(ci->callstatus & CIST_CLSSUP) && ttistrue(s2v(L->top.p - 1)))
+          ci->callstatus |= CIST_CLSSUP;
+        L->top.p--;  /* remove __close result */
+      }
       ci->u.l.savedpc--;  /* repeat instruction to close other vars. */
       break;
     }
@@ -1157,6 +1162,9 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
   StkId base;
   const Instruction *pc;
   int trap;
+  struct lua_longjmp lj;
+  volatile int hastbcjmp = 0;
+  CallInfo * volatile tbcci = NULL;
 #if LUA_USE_JUMPTABLE
 #include "ljumptab.h"
 #endif
@@ -1169,6 +1177,84 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
   if (l_unlikely(trap))
     trap = luaG_tracecall(L);
   base = ci->func.p + 1;
+  if (cl->p->needclose) {
+    if (!hastbcjmp) {
+      lj.previous = L->errorJmp;
+      L->errorJmp = &lj;
+      hastbcjmp = 1;
+    }
+    lj.status = LUA_OK;
+    if (luai_setjmp(lj.b) != 0) {
+      /* recovery handler: error or yield caught */
+      int blkstatus = lj.status;
+      if (blkstatus == LUA_YIELD) {
+        L->errorJmp = lj.previous;
+        hastbcjmp = 0;
+        luaD_throw(L, LUA_YIELD);  /* forward yield */
+      }
+      /* check for a yieldable pcall between the error and our frame;
+         if found, defer to precover via the resume handler */
+      {
+        CallInfo *scan_ci;
+        for (scan_ci = L->ci; scan_ci != (CallInfo *)tbcci;
+             scan_ci = scan_ci->previous) {
+          if (scan_ci->callstatus & CIST_YPCALL) {
+            L->errorJmp = lj.previous;
+            hastbcjmp = 0;
+            luaD_throw(L, blkstatus);
+          }
+        }
+      }
+      ci = (CallInfo *)tbcci;
+      L->ci = ci;
+      cl = ci_func(ci);
+      base = ci->func.p + 1;
+      /* walk up frames to find one with tbc blocks */
+      while (L->tbclist.p < base) {
+        if (ci->callstatus & CIST_FRESH) {
+          L->errorJmp = lj.previous;
+          hastbcjmp = 0;
+          luaD_throw(L, blkstatus);  /* no tbc in our scope, re-throw */
+        }
+        ci = ci->previous;
+        L->ci = ci;
+        lua_assert(isLua(ci));
+        cl = ci_func(ci);
+        base = ci->func.p + 1;
+      }
+      tbcci = ci;
+      {
+        /* find OP_CLOSE covering the innermost tbc var */
+        int R = cast_int(L->tbclist.p - base);
+        const Instruction *scan = ci->u.l.savedpc;
+        const Instruction *codeend = cl->p->code + cl->p->sizecode;
+        while (scan < codeend) {
+          if (GET_OPCODE(*scan) == OP_CLOSE && GETARG_A(*scan) <= R)
+            break;
+          scan++;
+        }
+        if (scan >= codeend) {
+          /* tbc var is function-level, not block-level;
+             let pcall/resume handle it */
+          L->errorJmp = lj.previous;
+          hastbcjmp = 0;
+          luaD_throw(L, blkstatus);
+        }
+        ci->callstatus |= CIST_CLSERR;
+        setcistrecst(ci, blkstatus);
+        ci->u.l.savedpc = scan;
+      }
+      if (L->top.p < ci->top.p)
+        L->top.p = ci->top.p;
+      trap = 0;
+      goto returning;
+    }
+    tbcci = ci;
+  }
+  else if (hastbcjmp) {
+    L->errorJmp = lj.previous;
+    hastbcjmp = 0;
+  }
   /* main loop of interpreter */
   for (;;) {
     Instruction i;  /* instruction being executed */
@@ -1590,7 +1676,26 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
       }
       vmcase(OP_CLOSE) {
         StkId ra = RA(i);
-        Protect(luaF_closewithouterr(L, ra, LUA_OK, 1));
+        if (ci->callstatus & CIST_CLSERR) {
+          int suppressed = ci->callstatus & CIST_CLSSUP;
+          int status;
+          if (suppressed)
+            status = CLOSEKTOP;
+          else
+            status = getcistrecst(ci);
+          Protect(luaF_close(L, ra, &status, 1));
+          ci->callstatus &= ~(CIST_CLSERR | CIST_CLSSUP);
+          setcistrecst(ci, LUA_OK);
+          if (status == LUA_OK || suppressed) {
+            vmbreak;  /* suppressed: continue to escape pc */
+          }
+          else {
+            luaD_throw(L, status);
+          }
+        }
+        else {
+          Protect(luaF_closewithouterr(L, ra, LUA_OK, 1));
+        }
         vmbreak;
       }
       vmcase(OP_TBC) {
@@ -1780,8 +1885,11 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
           }
         }
        ret:  /* return from a Lua function */
-        if (ci->callstatus & CIST_FRESH)
+        if (ci->callstatus & CIST_FRESH) {
+          if (hastbcjmp)
+            L->errorJmp = lj.previous;
           return;  /* end this frame */
+        }
         else {
           ci = ci->previous;
           goto returning;  /* continue running caller in this frame */

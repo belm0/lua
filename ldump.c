@@ -190,6 +190,7 @@ static void dumpFunction (DumpState *D, const Proto *f, TString *psource) {
   dumpByte(D, f->numparams);
   dumpByte(D, f->is_vararg);
   dumpByte(D, f->maxstacksize);
+  dumpByte(D, f->needclose);
   dumpCode(D, f);
   dumpConstants(D, f);
   dumpUpvalues(D, f);
